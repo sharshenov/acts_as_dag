@@ -19,6 +19,7 @@ module ActsAsDAG
           belongs_to :parent,     :class_name => '#{self.name}', :foreign_key => :parent_id, :inverse_of => :child_links
           belongs_to :child,      :class_name => '#{self.name}', :foreign_key => :child_id, :inverse_of => :parent_links
 
+          after_create Proc.new { |link| HelperMethods.unlink(nil, child) if parent }
           after_save Proc.new {|link| HelperMethods.update_transitive_closure_for_new_link(link) }
           after_destroy Proc.new {|link| HelperMethods.update_transitive_closure_for_destroyed_link(link) }
 
@@ -222,10 +223,6 @@ module ActsAsDAG
       self.class.joins("JOIN (#{lineage_links.to_sql}) lineage_links ON #{self.class.table_name}.id = lineage_links.id").order("CASE ancestor_id WHEN #{id} THEN distance ELSE -distance END") # Ensure the links are orders furthest ancestor to furthest descendant
     end
 
-    private
-
-    # CALLBACKS
-
     def initialize_dag
       subtree_links.first_or_create!(:descendant_id => self.id, :distance => 0) # Self Descendant
       parent_links.first_or_create!(:parent_id => nil) # Root link
@@ -248,9 +245,6 @@ module ActsAsDAG
 
       # Create a new parent-child link
       klass.link_table_entries.create!(:parent_id => parent.id, :child_id => child.id)
-
-      # If we have been passed a parent, find and destroy any existing links from nil (root) to the child as it can no longer be a top-level node
-      unlink(nil, child) if parent
     end
 
     def self.update_transitive_closure_for_new_link(new_link)
@@ -300,6 +294,8 @@ module ActsAsDAG
       klass = destroyed_link.node_class
       parent = destroyed_link.parent
       child = destroyed_link.child
+
+      child.initialize_dag
 
       # If the parent was nil, we don't need to update descendants because there are no descendants of nil
       return unless parent
